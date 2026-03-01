@@ -1,4 +1,4 @@
-# Robot Software Architecture
+Robot Software Architecture
 
 robot/
 │

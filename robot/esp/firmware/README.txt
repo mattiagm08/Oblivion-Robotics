@@ -1,4 +1,4 @@
-# Firmware Structure
+Firmware Structure
 
 firmware/
 │
