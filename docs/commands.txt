@@ -1,0 +1,44 @@
+CONNESSIONE E TRASFERIMENTO (DA ESEGUIRE SUL TUO PC)
+ssh pi@192.168.1.15                | Si collega al Raspberry (usa l'IP corretto)
+scp -r ./robot pi@192.168.1.15:~/  | Invia la cartella 'robot' dal PC al Raspberry
+scp file.py pi@192.168.1.15:~/     | Invia un singolo file dal PC al Raspberry
+exit                               | Chiude la sessione SSH e torna al tuo PC
+
+GESTIONE FILE E CARTELLE (DENTRO IL RASPBERRY)
+ls                                 | Elenca i file nella cartella attuale
+ls -l                              | Elenca i file con dettagli (permessi, data)
+cd nome_cartella                   | Entra in una cartella
+cd ..                              | Torna alla cartella precedente
+pwd                                | Mostra il percorso della cartella dove ti trovi
+mkdir test                         | Crea una nuova cartella chiamata 'test'
+touch main.py                      | Crea un nuovo file vuoto chiamato 'main.py'
+nano main.py                       | Apre l'editor di testo per modificare il file
+rm file.py                         | Elimina definitivamente un file
+rm -rf cartella                    | Elimina una cartella e tutto il suo contenuto
+mv vecchio.py nuovo.py             | Rinomina o sposta un file/cartella
+cp file.py copia.py                | Crea una copia di un file
+
+ESECUZIONE E DIPENDENZE
+python3 main.py                    | Esegue il programma principale
+python3 debug_visione.py           | Esegue il tool di debug della visione
+pip install opencv-python          | Installa la libreria per la telecamera
+pip install pyserial               | Installa la libreria per parlare con l'ESP32
+pip install numpy                  | Installa la libreria per i calcoli matematici
+sudo apt update                    | Aggiorna la lista dei pacchetti di sistema
+CTRL + C                           | Interrompe forzatamente il programma in esecuzione
+
+HARDWARE E SISTEMA
+ls /dev/ttyUSB* | Mostra se l'ESP32 è collegato via USB (porta 0, 1...)
+ls /dev/ttyACM* | Altro nome comune per la porta USB dell'ESP32
+hostname -I                        | Mostra l'indirizzo IP del Raspberry
+htop                               | Mostra l'uso di CPU e RAM (utile per la visione)
+sudo raspi-config                  | Apre il menu di configurazione (Camera, Seriale, I2C)
+sudo usermod -a -G dialout $USER   | Sblocca i permessi per la porta seriale (fatto una volta)
+sudo shutdown now                  | Spegne il Raspberry in modo sicuro
+sudo reboot                        | Riavvia il Raspberry
+
+UTILI PER LA GARA (CONTROLLO RAPIDO)
+cat robot.log                      | Legge il contenuto di un file di log
+tail -f robot.log                  | Mostra il log in tempo reale mentre il robot gira
+df -h                              | Controlla quanto spazio libero rimane sulla SD
+vcgencmd measure_temp              | Controlla la temperatura del processore

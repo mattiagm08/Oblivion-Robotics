@@ -1,0 +1,20 @@
+sensori (i2c) -> multiplexer (i2c)-> esp32 -> seriale -> Raspbberry -> Elabora e ritorna
+
+import serial - COM
+
+Raspberry Pi                          ESP32
+─────────────────────────────────────────────────────
+lineCamera.py  ──►  stateMachine
+colorDetector  ──►  stateMachine
+victimDetector ──►  stateMachine
+                         │
+                    boardComm.py  ──serial──►  serialProtocol.cpp
+                                                      │
+                                         ┌────────────┼────────────┐
+                                     motorDriver  pidController  rescueArm
+                                         │                │
+                                      encoder         imuSensor
+                                                       tofSensor
+                                                      colorSensor
+                                                          │
+                    boardComm.py  ◄─serial──  serialProtocol.cpp
