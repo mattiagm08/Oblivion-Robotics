@@ -1,9 +1,9 @@
 """
 ###########################################################################
-# DEBUG TOOL: SISTEMA VISIONE RCJ RESCUE LINE 2026 - PC / WEBCAM          #
+# DEBUG TOOL: SISTEMA VISIONE RCJ RESCUE LINE 2026 - RASPBERRY            #
 ###########################################################################
 # Verifica ROI, offset, look-ahead, marcatori verdi, argento e rosso.     #
-# Usa lineCameraDebug.py (cv2.VideoCapture).                              #
+# Usa lineCamera.py (PiCamera2).                                          #
 # Premi 'q' per uscire.                                                   #
 ###########################################################################
 """
@@ -14,14 +14,14 @@ import os
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from sensors.lineCameraPC import LineCamera
+from sensors.lineCamera import LineCamera
 from config import MAX_SPEED, MIN_SPEED
 
 
 def main():
-    print("[INFO] DEBUG VISIONE RCJ AVVIATO - PC MODE")
+    print("[INFO] DEBUG VISIONE RCJ AVVIATO - RASPBERRY MODE")
 
-    cam = LineCamera(cameraIndex=0)
+    cam = LineCamera()
     print("Premi 'q' per uscire.")
 
     while True:
@@ -34,7 +34,7 @@ def main():
         # ##################################################################
         # ROI STEER (bassa, rossa)
         # ##################################################################
-        # FIX: chiave corretta è 'roiViz' non 'roi_viz'
+        # FIX: era 'roi_viz' → chiave corretta è 'roiViz'
         rL_y, rL_h = data['roiViz'][0]
         cv2.rectangle(frame, (0, rL_y), (320, rL_y + rL_h), (0, 0, 255), 2)
         cv2.putText(frame, "STEER", (5, rL_y + 15),
@@ -64,7 +64,7 @@ def main():
                         (cx_low - 20, rL_y - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
 
-        # FIX: chiave corretta è 'lookAhead' non 'look_ahead'
+        # FIX: era 'look_ahead' → chiave corretta è 'lookAhead'
         if data['lookAhead'] is not None:
             cx_high = int((data['lookAhead'] * 160) + 160)
             cv2.circle(frame, (cx_high, rH_y + (rH_h // 2)), 7, (255, 255, 0), -1)
@@ -72,8 +72,8 @@ def main():
         # ##################################################################
         # SIMULAZIONE VELOCITÀ
         # ##################################################################
-        offVal  = data['offset']   if data['offset']   is not None else 0.0
-        # FIX: chiave corretta è 'lookAhead'
+        offVal  = data['offset']    if data['offset']    is not None else 0.0
+        # FIX: era 'look_ahead' → chiave corretta è 'lookAhead'
         lookVal = data['lookAhead'] if data['lookAhead'] is not None else offVal
 
         curveFactor = (abs(offVal) * 0.4) + (abs(lookVal) * 0.6)
@@ -89,7 +89,7 @@ def main():
         # ##################################################################
         # MARCATORI VERDI
         # ##################################################################
-        # FIX: chiave corretta è 'greenLeft'/'greenRight'
+        # FIX: era 'green_left'/'green_right' → chiavi corrette sono 'greenLeft'/'greenRight'
         if data['greenLeft']:
             cv2.rectangle(frame, (0, rG_y), (160, rG_y + rG_h),
                           (0, 200, 0), -1)
@@ -122,11 +122,12 @@ def main():
         # ##################################################################
         # MOSTRA FRAME
         # ##################################################################
-        cv2.imshow("DEBUG RCJ 2026 - PC", frame)
+        cv2.imshow("DEBUG RCJ 2026 - RASPBERRY", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     cam.release()
+    cv2.destroyAllWindows()
     print("[INFO] Debug terminato.")
 
 

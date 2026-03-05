@@ -6,13 +6,18 @@ class LineFollow(BaseState):
     ###########################################################################
     # LINE FOLLOW - STATE                                                     #
     ###########################################################################
-    # Gestisce il seguilinea principale con velocità adattiva (Look-Ahead).   #
-    # Monitora costantemente i sensori per attivare le transizioni verso:     #
-    # - OBSTACLE_AVOIDANCE: Se il ToF rileva un oggetto (Priorità 1).         #
-    # - SEESAW_NAVIGATION: Se rileva inclinazione > 15°.                      #
-    # - RAMP_NAVIGATION: Se rileva inclinazione tra 10° e 15°.                #
-    # - GAP_CROSSING: Se la linea sparisce (ROI bassa vuota).                 #
-    # - INTERSECTION_HANDLING: Se rileva marcatori verdi.                     #
+    # GESTISCE IL SEGUILINEA PRINCIPALE CON VELOCITA' ADATTIVA (LOOK-AHEAD). #
+    # MONITORA COSTANTEMENTE I SENSORI PER ATTIVARE LE TRANSIZIONI VERSO:    #
+    # - OBSTACLE_AVOIDANCE:    SE IL TOF RILEVA UN OGGETTO (PRIORITA' 1).    #
+    # - EVACUATION_ZONE_ENTER: SE RILEVA IL NASTRO ARGENTO (via LineCamera). #
+    # - INTERSECTION_HANDLING: SE RILEVA MARCATORI VERDI (INCROCIO/U-TURN).  #
+    # - GAP_CROSSING:          SE LA LINEA SPARISCE (OFFSET NULLO).          #
+    ###########################################################################
+    # LOGICA VERDI (ROBOCUP RESCUE LINE):                                     #
+    # - uTurn (verde SX + DX):  -> INTERSECTION_HANDLING (targetDir=U_TURN)  #
+    # - greenLeft:              -> INTERSECTION_HANDLING (targetDir=LEFT)     #
+    # - greenRight:             -> INTERSECTION_HANDLING (targetDir=RIGHT)    #
+    # - greenForward (solo):    -> nessuna transizione, prosegue dritto       #
     ###########################################################################
     """
 
@@ -24,44 +29,38 @@ class LineFollow(BaseState):
     def execute(self):
 
         # ##################################################################
-        # FASE 1: ACQUISIZIONE DATI SENSORI                                #
+        # FASE 1: ACQUISIZIONE DATI SENSORI E CAMERA                       #
         # ##################################################################
-        data = self.sm.lineCam.getLineData()
-        distance = self.sm.board.getDistance()
-        pitch = self.sm.board.getPitch()
-        silver_physical = self.sm.board.getIsSilver()
-        
+        data          = self.sm.lineCam.getLineData()
+        distanceFront = self.sm.board.getDistanceFront()
+        distanceLeft  = self.sm.board.getDistanceLeft()
+        distanceRight = self.sm.board.getDistanceRight()
+
         if data is None:
             return "GAP_CROSSING"
 
         # ##################################################################
-        # FASE 2: PRIORITÀ MASSIMA - OSTACOLI                              #
+        # FASE 2: PRIORITA' MASSIMA - OSTACOLI (TOF)                       #
         # ##################################################################
-        if distance < OBSTACLE_DISTANCE:
+        if (distanceFront < OBSTACLE_DISTANCE or
+            distanceLeft  < OBSTACLE_DISTANCE or
+            distanceRight < OBSTACLE_DISTANCE):
             return "OBSTACLE_AVOIDANCE"
 
         # ##################################################################
-        # FASE 3: RILEVAMENTO ARGENTO (RIDONDANZA BOARD + CAMERA)          #
+        # FASE 3: RILEVAMENTO ARGENTO (INGRESSO EVACUATION ZONE)           #
         # ##################################################################
-        silver_visual = self.sm.colorDet.checkForSilver(data['frame'])
-        
-        if silver_physical or silver_visual:
-            source = "FISICO" if silver_physical else "VISIVO"
-            self.sm.logger.warn(f"ARGENTO RILEVATO ({source})! INGRESSO EVACUATION ZONE")
+        if data['silver']:
+            self.sm.logger.warn("ARGENTO RILEVATO! INGRESSO EVACUATION ZONE")
             return "EVACUATION_ZONE_ENTER"
 
         # ##################################################################
-        # FASE 4: CONTROLLO PENDENZE E RAMPE                               #
+        # FASE 5: RILEVAMENTO MARCATORI VERDI (ROBOCUP RESCUE LINE)        #
         # ##################################################################
-        if abs(pitch) > 15.0:
-            return "SEESAW_NAVIGATION"
-        elif abs(pitch) > 10.0:
-            return "RAMP_NAVIGATION"
+        if data['uTurn']:
+            return "INTERSECTION_HANDLING"
 
-        # ##################################################################
-        # FASE 5: RILEVAMENTO MARCATORI VERDI                              #
-        # ##################################################################
-        if data['green_left'] or data['green_right']:
+        if data['greenLeft'] or data['greenRight']:
             return "INTERSECTION_HANDLING"
 
         # ##################################################################
@@ -71,19 +70,19 @@ class LineFollow(BaseState):
             return "GAP_CROSSING"
 
         # ##################################################################
-        # FASE 7: CALCOLO VELOCITÀ DINAMICA (LOOK-AHEAD)                   #
+        # FASE 7: CALCOLO VELOCITA' DINAMICA (LOOK-AHEAD)                  #
         # ##################################################################
-        look_ahead = data['look_ahead'] if data['look_ahead'] is not None else data['offset']
+        lookAheadVal = data['lookAhead'] if data['lookAhead'] is not None else data['offset']
 
-        # MIX PRECISIONE IMMEDIATA (OFFSET) E PREVISIONE (LOOK AHEAD)
-        curve_factor = (abs(data['offset']) * 0.4) + (abs(look_ahead) * 0.6)
+        # Peso maggiore al look-ahead (0.6) per anticipare le curve
+        curveFactor  = (abs(data['offset']) * 0.4) + (abs(lookAheadVal) * 0.6)
 
-        speed_range = self.maxSpeed - self.minSpeed
-        currentSpeed = int(self.maxSpeed - (curve_factor * speed_range))
+        speedRange   = self.maxSpeed - self.minSpeed
+        currentSpeed = int(self.maxSpeed - (curveFactor * speedRange))
         currentSpeed = max(self.minSpeed, currentSpeed)
 
         # ##################################################################
-        # FASE 8: INVIO COMANDI ALLA BOARD                                 #
+        # FASE 8: INVIO COMANDI ALLA MOTHERBOARD                           #
         # ##################################################################
         self.sm.board.sendControl(data['offset'], currentSpeed)
 

@@ -11,26 +11,25 @@ class EvacuationZoneEnter(BaseState):
     # Gestisce l'ingresso nella zona di salvataggio.                          #
     #                                                                         #
     # Fasi Operative:                                                         #
-    # 1. DETECT  => IDENTIFICAZIONE NASTRO ARGENTO (FISICA + VISIVA)          #
-    # 2. CROSS   => AVANZAMENTO CONTROLLATO OLTRE IL NASTRO                   #
+    # 1. DETECT  => CONFERMA NASTRO ARGENTO (camera + sensore fisico ESP32)   #
+    # 2. CROSS   => AVANZAMENTO OLTRE IL NASTRO E LA PARETE DI INGRESSO       #
     # 3. TRANSIT => ATTIVAZIONE MODALITÀ RICERCA VITTIME                      #
+    ###########################################################################
+    # REGOLA 3.9.4: nastro argento 25mm × 250mm all'ingresso EZ.              #
+    # Il rilevamento visivo usa data['silver'] calcolato da LineCamera        #
+    # tramite maschera HSV (nessun ColorDetector esterno necessario).         #
     ###########################################################################
     """
 
     def __init__(self, stateMachine):
         super().__init__(stateMachine)
 
-        # FASE CORRENTE DELLA PROCEDURA DI INGRESSO
-        self.phase = "DETECT"
-
-        # TIMESTAMP PER IL CONTROLLO DELL'AVANZAMENTO OLTRE IL NASTRO
+        self.phase       = "DETECT"
         self.cross_start = 0
 
     def execute(self):
 
-        # ACQUISIZIONE DATI SENSORI E VISIONE
         data = self.sm.lineCam.getLineData()
-        silver_physical = self.sm.board.getIsSilver()
 
         # ##################################################################
         # FASE 1: CONFERMA ARGENTO                                         #
@@ -38,29 +37,28 @@ class EvacuationZoneEnter(BaseState):
         if self.phase == "DETECT":
 
             self.sm.logger.warn("Conferma Nastro Argento in corso...")
-            
-            # RIDONDANZA: CONTROLLO SIA IL FLAG DELLA CAMERA SIA IL SENSORE SULL'ESP32
-            silver_visual = self.sm.colorDet.checkForSilver(data['frame']) if data else False
-            
-            if silver_physical or silver_visual:
-                source = "FISICO" if silver_physical else "VISIVO"
-                self.sm.logger.success(f"Nastro Argento confermato ({source})! Ingresso...")
-                self.phase = "CROSS"
+
+            # Rilevamento SOLO visivo: il protocollo ESP32 non include campo argento.
+            # data['silver'] e' calcolato da LineCamera tramite maschera HSV.
+            silver_visual = data['silver'] if data else False
+
+            if silver_visual:
+                self.sm.logger.success("Nastro Argento confermato (VISIVO)! Ingresso EZ...")
+                self.phase       = "CROSS"
                 self.cross_start = time.time()
-            
-            # MANTENIMENTO SEGUILINEA LENTO FINCHÉ NON SIAMO SOPRA IL NASTRO
+
+            # SEGUILINEA LENTO FINCHÉ NON SIAMO SOPRA IL NASTRO
             offset = data['offset'] if data and data['offset'] is not None else 0
             self.sm.board.sendControl(offset, MIN_SPEED)
 
         # ##################################################################
-        # FASE 2: ATTRAVERSAMENTO NASTRO                                   #
+        # FASE 2: ATTRAVERSAMENTO NASTRO + PARETE DI INGRESSO              #
         # ##################################################################
         elif self.phase == "CROSS":
 
-            # AVANZAMENTO DRITTO PER SUPERARE IL NASTRO E LA PARETE DI INGRESSO
             self.sm.board.sendControl(0, MIN_SPEED)
 
-            # IL ROBOT AVANZA PER 1.5 SECONDI PER ENTRARE COMPLETAMENTE NELL'AREA
+            # AVANZA 1.5s PER ENTRARE COMPLETAMENTE NELL'EZ
             if time.time() - self.cross_start > 1.5:
                 self.phase = "TRANSIT"
 
@@ -70,16 +68,14 @@ class EvacuationZoneEnter(BaseState):
         elif self.phase == "TRANSIT":
 
             self.sm.logger.state("AREA EVACUAZIONE RAGGIUNTA")
-            
-            # FERMIAMO IL ROBOT PRIMA DI CAMBIARE MODALITÀ
             self.sm.board.sendControl(0, 0)
-            
             self._reset()
-            return "RESCUE_SEARCH"
+            # FIX: era "RESCUE_SEARCH" che non esiste in stateMachine.
+            #      Il nome corretto dalla struttura è "VICTIM_SEARCH".
+            return "VICTIM_SEARCH"
 
         return "EVACUATION_ZONE_ENTER"
 
     def _reset(self):
-        """ RIPRISTINO STATO INTERNO PER UTILIZZI FUTURI """
-        self.phase = "DETECT"
+        self.phase       = "DETECT"
         self.cross_start = 0

@@ -4,15 +4,18 @@
 #include <Arduino.h>
 
 class Encoder {
-private:
-    uint8_t _pinA, _pinB;
-    volatile long _count;
 public:
     Encoder(uint8_t pinA, uint8_t pinB);
+
     void init();
-    void IRAM_ATTR handleInterrupt();
-    long getCount();
     void reset();
+    long getCount();
+    void IRAM_ATTR handleInterrupt();
+
+private:
+    uint8_t _pinA;
+    uint8_t _pinB;
+    volatile long _count;
 };
 
 #endif

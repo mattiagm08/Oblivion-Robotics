@@ -2,6 +2,7 @@ import time
 import sys
 from hardware.boardComm import BoardComm
 from sensors.lineCamera import LineCamera
+
 from utils.logger import Logger
 
 # IMPORT DEGLI STATI OPERATIVI DELLA FSM
@@ -12,7 +13,7 @@ from states.obstacleAvoidance import ObstacleAvoidance
 from states.rampNavigation import RampNavigation
 from states.seesawNavigation import SeesawNavigation
 from states.evacuationZoneEnter import EvacuationZoneEnter
-
+from states.victimSearch import VictimSearch
 
 class StateMachine:
     """
@@ -41,17 +42,18 @@ class StateMachine:
 
             # REGISTRAZIONE DI TUTTI GLI STATI NELLA TABELLA DI DISPATCH
             self.states = {
-                "LINE_FOLLOW": LineFollow(self),
-                "GAP_CROSSING": GapCrossing(self),
-                "INTERSECTION_HANDLING": IntersectionHandling(self),
-                "OBSTACLE_AVOIDANCE": ObstacleAvoidance(self),
-                "RAMP_NAVIGATION": RampNavigation(self),
-                "SEESAW_NAVIGATION": SeesawNavigation(self),
-                "EVACUATION_ZONE_ENTER": EvacuationZoneEnter(self)
+                "LINE_FOLLOW":            LineFollow(self),
+                "GAP_CROSSING":           GapCrossing(self),
+                "INTERSECTION_HANDLING":  IntersectionHandling(self),
+                "OBSTACLE_AVOIDANCE":     ObstacleAvoidance(self),
+                "RAMP_NAVIGATION":        RampNavigation(self),
+                "SEESAW_NAVIGATION":      SeesawNavigation(self),
+                "EVACUATION_ZONE_ENTER":  EvacuationZoneEnter(self),
+                "VICTIM_SEARCH":          VictimSearch(self),
             }
 
             # STATO INIZIALE DEL ROBOT
-            self.current_state_name = "LINE_FOLLOW"
+            self.currentStateName = "LINE_FOLLOW"
 
             # FLAG DI CONTROLLO LOOP PRINCIPALE
             self.active = True
@@ -66,33 +68,33 @@ class StateMachine:
         # #####################################################################
         # CICLO PRINCIPALE DELLA FSM ESEGUITO A CIRCA 50Hz (20ms)             #
         # #####################################################################
-        self.logger.state(self.current_state_name)
+        self.logger.state(self.currentStateName)
 
         try:
             while self.active:
                 # RECUPERO DELL'OGGETTO CORRISPONDENTE ALLO STATO CORRENTE
-                state_obj = self.states.get(self.current_state_name)
+                stateObj = self.states.get(self.currentStateName)
 
-                if not state_obj:
-                    self.logger.error(f"Stato non trovato: {self.current_state_name}")
+                if not stateObj:
+                    self.logger.error(f"Stato non trovato: {self.currentStateName}")
                     break
 
                 # ESECUZIONE LOGICA DELLO STATO
-                # OGNI STATO RESTITUISCE IL NOME DELLO STATO SUCCESSIVO O None PER MANTENERE LO STESSO STATO
-                next_state_name = state_obj.execute()
+                # OGNI STATO RESTITUISCE IL NOME DELLO STATO SUCCESSIVO
+                # O None PER MANTENERE LO STESSO STATO
+                nextStateName = stateObj.execute()
 
                 # GESTIONE TRANSIZIONE DI STATO (CON CONTROLLO NULL)
-                if next_state_name and next_state_name != self.current_state_name:
-
-                    if next_state_name in self.states:
+                if nextStateName and nextStateName != self.currentStateName:
+                    if nextStateName in self.states:
                         self.logger.info(
-                            f"Transizione: {self.current_state_name} -> {next_state_name}"
+                            f"Transizione: {self.currentStateName} -> {nextStateName}"
                         )
-                        self.current_state_name = next_state_name
-                        self.logger.state(self.current_state_name)
+                        self.currentStateName = nextStateName
+                        self.logger.state(self.currentStateName)
                     else:
                         self.logger.error(
-                            f"Tentata transizione verso stato inesistente: {next_state_name}"
+                            f"Tentata transizione verso stato inesistente: {nextStateName}"
                         )
 
                 # SINCRONIZZAZIONE DEL LOOP A 50Hz (PERIODO 20ms)
@@ -111,10 +113,10 @@ class StateMachine:
         # #####################################################################
         self.logger.warn("Richiesta arresto robot...")
 
-        # INVIANO COMANDO DI STOP AI MOTORI PRIMA DI CHIUDERE LA COMUNICAZIONE
+        # INVIO COMANDO DI STOP AI MOTORI PRIMA DI CHIUDERE LA COMUNICAZIONE
         if hasattr(self, 'board') and self.board:
             self.board.sendControl(0, 0)
-            time.sleep(0.1) 
+            time.sleep(0.1)
             self.board.close()
             self.logger.info("Comunicazione seriale chiusa.")
 
@@ -125,6 +127,7 @@ class StateMachine:
 
         self.active = False
         self.logger.success("Robot arrestato con successo.")
+
 
 if __name__ == "__main__":
     fsm = StateMachine()

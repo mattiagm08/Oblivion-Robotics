@@ -1,28 +1,35 @@
 import time
 from .baseState import BaseState
+from config import GAP_SPEED, GAP_TIMEOUT
+
 
 class GapCrossing(BaseState):
     """
     ###########################################################################
     # GAP CROSSING - STATE                                                    #
     ###########################################################################
-    # Gestisce il caso in cui la linea nera viene persa.                      #
-    # Il robot prosegue diritto mantenendo l'ultimo heading noto dall'IMU     #
-    # fino a quando la linea non viene ripresa.                               #
+    # Gestisce il caso in cui la linea nera viene persa (gap sul percorso).  #
+    # Il robot avanza in linea retta all'ultima velocità nota finché         #
+    # la linea non viene ripresa o scatta il timeout.                        #
+    ###########################################################################
+    # REGOLA 3.3.2: gap max 20cm, almeno 5cm di linea prima del gap.         #
+    # GAP_TIMEOUT e GAP_SPEED sono definiti in config.py per calibrazione    #
+    # rapida senza toccare il codice.                                        #
     ###########################################################################
     """
 
     def __init__(self, stateMachine):
         super().__init__(stateMachine)
-        self.entry_time = 0
-        self.timeout = 2.5  # SE DOPO 2.5s NON TROVA LINEA, SI FERMA
+        self.entryTime = 0
+        self.timeout   = GAP_TIMEOUT
 
     def execute(self):
+
         # ##################################################################
-        # FASE 1: INIZIALIZZAZIONE GAP CROSSING                            #
+        # FASE 1: INIZIALIZZAZIONE (primo ciclo nello stato)               #
         # ##################################################################
-        if self.entry_time == 0:
-            self.entry_time = time.time()
+        if self.entryTime == 0:
+            self.entryTime = time.time()
             self.sm.logger.warn("LINEA PERSA! AVVIO PROCEDURA GAP CROSSING...")
 
         # ##################################################################
@@ -31,24 +38,22 @@ class GapCrossing(BaseState):
         data = self.sm.lineCam.getLineData()
         if data and data['offset'] is not None:
             self.sm.logger.info("LINEA RITROVATA!")
-            self.entry_time = 0  # RESET PER LA PROSSIMA VOLTA
+            self.entryTime = 0
             return "LINE_FOLLOW"
 
         # ##################################################################
-        # FASE 3: CONTROLLO TIMEOUT                                        #
+        # FASE 3: TIMEOUT - LINEA NON TROVATA                              #
         # ##################################################################
-        if time.time() - self.entry_time > self.timeout:
+        if time.time() - self.entryTime > self.timeout:
             self.sm.logger.error("TIMEOUT GAP CROSSING! LINEA NON TROVATA.")
-            # FERMA IL ROBOT IN SICUREZZA
             self.sm.board.sendControl(0, 0)
-            return "LINE_FOLLOW"  # O STATO DI ERRORE/RICERCA
+            self.entryTime = 0
+            return "LINE_FOLLOW"
 
         # ##################################################################
-        # FASE 4: AZIONE - AVANZAMENTO LINEARE                             #
+        # FASE 4: AVANZAMENTO RETTILINEO SUL GAP                           #
         # ##################################################################
-        # VELOCITÀ RIDOTTA, OFFSET AZZERATO PER MANTENERE DIREZIONE RETTA
-        # SI PUÒ UTILIZZARE L'HEADING DELL'IMU PER CORREZIONE FUTURA
-        self.sm.board.sendControl(0.0, 120)
+        # FIX: era hardcoded 120 → usa GAP_SPEED da config.py
+        self.sm.board.sendControl(0.0, GAP_SPEED)
 
-        # PERMANENZA NELLO STATO FINCHÉ NON SI VERIFICA UNA CONDIZIONE DI TRANSIZIONE
         return "GAP_CROSSING"

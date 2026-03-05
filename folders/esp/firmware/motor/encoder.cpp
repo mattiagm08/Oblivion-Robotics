@@ -1,4 +1,4 @@
-#include "Encoder.h"
+#include "encoder.h"
 
 Encoder::Encoder(uint8_t pinA, uint8_t pinB) : _pinA(pinA), _pinB(pinB), _count(0) {}
 
@@ -12,5 +12,16 @@ void IRAM_ATTR Encoder::handleInterrupt() {
     else _count--;
 }
 
-long Encoder::getCount() { return _count; }
-void Encoder::reset() { _count = 0; }
+long Encoder::getCount() {
+    long temp;
+    noInterrupts();
+    temp = _count;
+    interrupts();
+    return temp;
+}
+
+void Encoder::reset() {
+    noInterrupts();
+    _count = 0;
+    interrupts();
+}

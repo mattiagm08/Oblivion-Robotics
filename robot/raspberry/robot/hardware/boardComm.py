@@ -8,14 +8,23 @@ class BoardComm:
     ###########################################################################
     # SERIALE ESP32 - COMUNICAZIONE                                           #
     ###########################################################################
-    # Gestisce l'invio dei comandi ai motori e la ricezione costante dei      #
-    # dati sensori (ToF, IMU e Colore) tramite un thread dedicato.            #
+    # PROTOCOLLO INVIO (Raspberry -> ESP32):                                  #
+    #   <OFF:0.35,SPD:150>                                                    #
+    #                                                                         #
+    # PROTOCOLLO RICEZIONE (ESP32 -> Raspberry):                              #
+    #   <TF:123,TS:80,TD:90,HEAD:45.2,ENL:500,ENR:498>                        #
+    #   TF  = ToF frontale  (mm)                                              #
+    #   TS  = ToF sinistra  (mm)                                              #
+    #   TD  = ToF destra    (mm)                                              #
+    #   HEAD = heading IMU   (gradi)                                          #
+    #   ENL = encoder sx    (ricevuto, non utilizzato dalla FSM)              #
+    #   ENR = encoder dx    (ricevuto, non utilizzato dalla FSM)              #
     ###########################################################################
     """
+
     def __init__(self):
-        # #####################################################################
-        # FASE 1: APERTURA PORTA SERIALE                                      #
-        # #####################################################################
+
+        # APERTURA PORTA SERIALE
         try:
             self.ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
             self.ser.flush()
@@ -23,65 +32,74 @@ class BoardComm:
             print(f"[ERROR] Impossibile aprire la porta seriale: {e}")
             self.ser = None
 
-        # #####################################################################
-        # FASE 2: INIZIALIZZAZIONE VARIABILI SENSORI                          #
-        # #####################################################################
-        self.distance = 999.0
-        self.pitch = 0.0
-        self.is_silver = False
-        
-        # #####################################################################
-        # FASE 3: CREAZIONE THREAD PER LETTURA CONTINUA                       #
-        # #####################################################################
+        # VARIABILI SENSORI
+        self.distanceFront = 9999.0
+        self.distanceLeft  = 9999.0
+        self.distanceRight = 9999.0
+        self.heading       = 0.0
+        self._encL         = 0   
+        self._encR         = 0   
+
+        # THREAD DI LETTURA CONTINUA
         self.running = True
-        self.thread = threading.Thread(target=self._read_loop, daemon=True)
+        self.thread  = threading.Thread(target=self._read_loop, daemon=True)
         self.thread.start()
 
     def _read_loop(self):
-        # #####################################################################
-        # FASE 4: CICLO DI LETTURA CONTINUA                                   #
-        # #####################################################################
+        # PROTOCOLLO RICEZIONE: <TF:VAL,TS:VAL,TD:VAL,HEAD:VAL,ENL:VAL,ENR:VAL>
         while self.running and self.ser:
             if self.ser.in_waiting > 0:
                 try:
-                    # LEGGE LA RIGA E VERIFICA CHE NON SIA VUOTA
                     line = self.ser.readline().decode('utf-8', errors='ignore').strip()
-                    if not line: continue
+                    if not line:
+                        continue
 
-                    # FORMATO ATTESO: "D:150,P:12.5,S:0" (DISTANZA, INCLINAZIONE, ARGENTO)
-                    parts = line.split(',')
-                    for p in parts:
-                        if ":" in p:
-                            key, value = p.split(":")
-                            if key == "D": self.distance = float(value)
-                            if key == "P": self.pitch = float(value)
-                            if key == "S": self.is_silver = bool(int(value))
+                    if line.startswith("<") and line.endswith(">"):
+                        line = line[1:-1]
+
+                    for p in line.split(','):
+                        if ":" not in p:
+                            continue
+                        key, value = p.split(":", 1)
+                        key = key.strip()
+
+                        if   key == "TF":   self.distanceFront = float(value)
+                        elif key == "TS":   self.distanceLeft  = float(value)
+                        elif key == "TD":   self.distanceRight = float(value)
+                        elif key == "HEAD": self.heading       = float(value)
+                        elif key == "ENL":  self._encL         = int(value)
+                        elif key == "ENR":  self._encR         = int(value)
+
                 except (ValueError, IndexError):
                     pass
                 except Exception as e:
                     print(f"[SERIAL DEBUG] Errore lettura: {e}")
+
             time.sleep(0.01)
 
     def sendControl(self, offset, speed):
-        # #####################################################################
-        # FASE 5: INVIO COMANDI AL BOARD                                      #
-        # #####################################################################
+        # PROTOCOLLO INVIO: <OFF:0.35,SPD:150>
         if self.ser:
-            # FORMATO SINCRONIZZATO: <off:VAL,spd:VAL>
-            msg = f"<off:{round(offset, 2)},spd:{int(speed)}>\n"
+            msg = f"<OFF:{round(offset, 2)},SPD:{int(speed)}>\n"
             try:
                 self.ser.write(msg.encode('utf-8'))
-            except:
+            except Exception:
                 pass
 
+    def getDistanceFront(self):
+        return self.distanceFront
+
+    def getDistanceLeft(self):
+        return self.distanceLeft
+
+    def getDistanceRight(self):
+        return self.distanceRight
+
     def getDistance(self):
-        return self.distance
+        return self.distanceFront
 
-    def getPitch(self):
-        return self.pitch
-
-    def getIsSilver(self):
-        return self.is_silver
+    def getHeading(self):
+        return self.heading
 
     def close(self):
         self.running = False
