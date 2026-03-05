@@ -1,18 +1,15 @@
 from .baseState import BaseState
-from config import MAX_SPEED, MIN_SPEED
+from config import MAX_SPEED, MIN_SPEED, GAP_SPEED, BACK_SPEED, GAP_TIMEOUT
+import time
 
 class LineFollow(BaseState):
     """
     ###########################################################################
     # LINE FOLLOW - STATE                                                     #
     ###########################################################################
-    # SEGUILINEA PURO CON VELOCITA' ADATTIVA (LOOK-AHEAD).                   #
-    # NON CAMBIA MAI STATO: USATO PER TEST ISOLATO DEL SEGUILINEA.           #
-    # - LINEA TROVATA:  CALCOLA OFFSET + VELOCITA' E INVIA ALL'ESP32.        #
-    # - LINEA PERSA:    INVIA STOP (SPD:0) E ATTENDE IL RITORNO DELLA LINEA. #
-    ###########################################################################
-    # STERZO BASATO SULLA ROI ALTA (LOOK-AHEAD): IL ROBOT ANTICIPA LA CURVA  #
-    # GUARDANDO LONTANO. LA ROI BASSA VIENE USATA SOLO PER LA VELOCITA'.     #
+    # SEGUILINEA CON VELOCITA' ADATTIVA (LOOK-AHEAD) E RECUPERO LINEA         #
+    # - LINEA TROVATA: CALCOLA OFFSET + VELOCITA' E INVIA ALL'ESP32           #
+    # - LINEA PERSA: AVANZA POCO (GAP), SE ANCORA PERSA TORNA INDIETRO        #
     ###########################################################################
     """
 
@@ -20,6 +17,8 @@ class LineFollow(BaseState):
         super().__init__(stateMachine)
         self.maxSpeed = MAX_SPEED
         self.minSpeed = MIN_SPEED
+        self.lostLineTime = 0
+        self.backwardPhase = False
 
     def execute(self):
 
@@ -29,32 +28,60 @@ class LineFollow(BaseState):
         data = self.sm.lineCam.getLineData()
 
         # ##################################################################
-        # LINEA NON TROVATA → STOP E ATTESA                                #
+        # LINEA TROVATA                                                    #
         # ##################################################################
-        if data is None or data['offset'] is None:
-            self.sm.board.sendControl(0.0, 0)
+        if data and data['offset'] is not None:
+            self.lostLineTime = 0
+            self.backwardPhase = False
+
+            offsetLow  = data['offset']
+            offsetHigh = data['lookAhead'] if data['lookAhead'] is not None else offsetLow
+
+            # STERZO
+            steeringOffset = offsetHigh
+
+            # VELOCITA' DINAMICA
+            curveFactor  = abs(offsetLow) * 0.4 + abs(offsetHigh) * 0.6
+            speedRange   = self.maxSpeed - self.minSpeed
+            currentSpeed = int(self.maxSpeed - curveFactor * speedRange)
+            currentSpeed = max(self.minSpeed, currentSpeed)
+
+            self.sm.board.sendControl(steeringOffset, currentSpeed)
             return "LINE_FOLLOW"
 
-        offsetLow  = data['offset']
-        offsetHigh = data['lookAhead'] if data['lookAhead'] is not None else offsetLow
+        # ##################################################################
+        # LINEA PERSA                                                     #
+        # ##################################################################
+        currentTime = time.time()
 
-        # ##################################################################
-        # STERZO: USA LA ROI ALTA PER ANTICIPARE LE CURVE                  #
-        # ##################################################################
-        steeringOffset = offsetHigh
+        if self.lostLineTime == 0:
+            self.lostLineTime = currentTime
+            self.backwardPhase = False
+            self.sm.logger.warn("LINEA PERSA! AVANZAMENTO PER GAP...")
 
-        # ##################################################################
-        # CALCOLO VELOCITA' DINAMICA (LOOK-AHEAD)                          #
-        # PESO MAGGIORE AL LOOK-AHEAD (0.6) PER ANTICIPARE LE CURVE        #
-        # ##################################################################
-        curveFactor  = abs(offsetLow) * 0.4 + abs(offsetHigh) * 0.6
-        speedRange   = self.maxSpeed - self.minSpeed
-        currentSpeed = int(self.maxSpeed - curveFactor * speedRange)
-        currentSpeed = max(self.minSpeed, currentSpeed)
+        elapsed = currentTime - self.lostLineTime
 
-        # ##################################################################
-        # INVIO COMANDI ALLA MOTHERBOARD                                   #
-        # ##################################################################
-        self.sm.board.sendControl(steeringOffset, currentSpeed)
+        # PRIMA FASE: AVANZA PER GAP_TIMEOUT / 2
+        if not self.backwardPhase and elapsed <= GAP_TIMEOUT / 2:
+            self.sm.board.sendControl(0.0, GAP_SPEED)
+            return "LINE_FOLLOW"
 
+        # SE ANCORA NON TROVA LINEA → TORNA INDIETRO
+        if not self.backwardPhase:
+            self.backwardPhase = True
+            self.lostLineTime = currentTime
+            self.sm.logger.warn("LINEA ANCORA NON TROVATA! RITORNO INDIETRO...")
+            self.sm.board.sendControl(0.0, -BACK_SPEED)
+            return "LINE_FOLLOW"
+
+        # FASE INDIETRO: se timeout → stop
+        if self.backwardPhase and elapsed > GAP_TIMEOUT / 2:
+            self.sm.logger.error("LINEA PERSA DOPO INDIETRO! STOP")
+            self.sm.board.sendControl(0.0, 0)
+            self.lostLineTime = 0
+            self.backwardPhase = False
+            return "LINE_FOLLOW"
+
+        # CONTINUA A TORNARE INDIETRO
+        self.sm.board.sendControl(0.0, -BACK_SPEED)
         return "LINE_FOLLOW"
