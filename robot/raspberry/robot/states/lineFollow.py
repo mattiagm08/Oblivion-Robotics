@@ -1,87 +1,123 @@
-from .baseState import BaseState
-from config import MAX_SPEED, MIN_SPEED, GAP_SPEED, BACK_SPEED, GAP_TIMEOUT
 import time
+from collections import deque
+from .baseState import BaseState
+from config import MAX_SPEED, MIN_SPEED
 
 class LineFollow(BaseState):
-    """
-    ###########################################################################
-    # LINE FOLLOW - STATE                                                     #
-    ###########################################################################
-    # SEGUILINEA CON VELOCITA' ADATTIVA (LOOK-AHEAD) E RECUPERO LINEA         #
-    # - LINEA TROVATA: CALCOLA OFFSET + VELOCITA' E INVIA ALL'ESP32           #
-    # - LINEA PERSA: AVANZA POCO (GAP), SE ANCORA PERSA TORNA INDIETRO        #
-    ###########################################################################
-    """
+
+    # ── Blind turn ────────────────────────────────────────────────────────────
+    BLIND_TURN_OFFSET_THRESHOLD = 0.45
+    MAX_BLIND_FRAMES            = 10
+    BLIND_TURN_AMPLIFY          = 1.10
+
+    # ── Speed clamp ───────────────────────────────────────────────────────────
+    CURVE_SLOW_THRESHOLD    = 0.30
+    CURVE_CONFIRM_THRESHOLD = 0.40
+    CURVE_MIN_SPEED         = None
+    CURVE_SPEED_EXPONENT    = 2.5
+
+    # ── Shake ─────────────────────────────────────────────────────────────────
+    SHAKE_REVERSE_SPEED = None
 
     def __init__(self, stateMachine):
         super().__init__(stateMachine)
-        self.maxSpeed = MAX_SPEED
-        self.minSpeed = MIN_SPEED
-        self.lostLineTime = 0
-        self.backwardPhase = False
+
+        self.shakeActive      = False
+        self.shakeStartTime   = 0
+        self.shakeDirection   = 1.0
+        self.shakeAttempt     = 0
+        self.lastValidOffset  = 0.0
+        self.maxShakeDuration = 2.0
+
+        self.bufferSize   = 3
+        self.commandQueue = deque(maxlen=self.bufferSize)
+        self.blindTurnFrames = 0
+
+        if self.CURVE_MIN_SPEED is None:
+            self.CURVE_MIN_SPEED = MIN_SPEED + 10
+
+        if self.SHAKE_REVERSE_SPEED is None:
+            self.SHAKE_REVERSE_SPEED = MIN_SPEED
+
+    def _computeSpeed(self, offsetFar, offsetNear):
+        speedRange  = MAX_SPEED - MIN_SPEED
+        targetSpeed = int(MAX_SPEED - speedRange * (abs(offsetFar) ** self.CURVE_SPEED_EXPONENT))
+        targetSpeed = max(MIN_SPEED, targetSpeed)
+
+        if abs(offsetFar) >= self.CURVE_SLOW_THRESHOLD:
+            targetSpeed = min(targetSpeed, self.CURVE_MIN_SPEED)
+
+        if offsetNear is not None and abs(offsetNear) >= self.CURVE_CONFIRM_THRESHOLD:
+            targetSpeed = min(targetSpeed, self.CURVE_MIN_SPEED)
+
+        return targetSpeed
 
     def execute(self):
-
-        # ##################################################################
-        # ACQUISIZIONE DATI CAMERA                                         #
-        # ##################################################################
         data = self.sm.lineCam.getLineData()
+        isLineVisible = (data is not None) and (data['offset'] is not None)
 
-        # ##################################################################
-        # LINEA TROVATA                                                    #
-        # ##################################################################
-        if data and data['offset'] is not None:
-            self.lostLineTime = 0
-            self.backwardPhase = False
+        if isLineVisible:
+            self.shakeActive     = False
+            self.shakeAttempt    = 0
+            self.blindTurnFrames = 0
+            self.lastValidOffset = data['offset']
 
-            offsetLow  = data['offset']
-            offsetHigh = data['lookAhead'] if data['lookAhead'] is not None else offsetLow
+            confirmOffset = data.get('confirmOffset')
+            targetSpeed   = self._computeSpeed(data['offset'], confirmOffset)
+            self.commandQueue.append((data['offset'], targetSpeed))
 
-            # STERZO
-            steeringOffset = offsetHigh
+        else:
+            inTightCurve = abs(self.lastValidOffset) >= self.BLIND_TURN_OFFSET_THRESHOLD
 
-            # VELOCITA' DINAMICA
-            curveFactor  = abs(offsetLow) * 0.4 + abs(offsetHigh) * 0.6
-            speedRange   = self.maxSpeed - self.minSpeed
-            currentSpeed = int(self.maxSpeed - curveFactor * speedRange)
-            currentSpeed = max(self.minSpeed, currentSpeed)
+            if inTightCurve and self.blindTurnFrames < self.MAX_BLIND_FRAMES:
+                self.blindTurnFrames += 1
+                blindOffset = max(-1.0, min(1.0,
+                                  self.lastValidOffset * self.BLIND_TURN_AMPLIFY))
+                self.sm.board.sendControl(blindOffset, self.CURVE_MIN_SPEED, shake=False)
+                self.sm.logger.info(
+                    f"BLIND TURN [{self.blindTurnFrames}/{self.MAX_BLIND_FRAMES}] "
+                    f"off={blindOffset:.2f}"
+                )
+                return "LINE_FOLLOW"
 
-            self.sm.board.sendControl(steeringOffset, currentSpeed)
-            return "LINE_FOLLOW"
+            self.blindTurnFrames = 0
 
-        # ##################################################################
-        # LINEA PERSA                                                     #
-        # ##################################################################
+            # GAP DISABILITATO — shake sempre, non si esce mai da LINE_FOLLOW
+            return self._gestisciShake(None)
+
+        # ── PIPELINE ─────────────────────────────────────────────────
+        if len(self.commandQueue) >= self.bufferSize:
+            cmd = self.commandQueue.popleft()
+            self.sm.board.sendControl(cmd[0], cmd[1], shake=False)
+        elif len(self.commandQueue) > 0:
+            cmd = self.commandQueue[-1]
+            self.sm.board.sendControl(cmd[0], cmd[1], shake=False)
+
+        return "LINE_FOLLOW"
+
+    def _gestisciShake(self, data):
         currentTime = time.time()
+        if not self.shakeActive:
+            self.shakeActive    = True
+            self.shakeStartTime = currentTime
+            self.shakeAttempt   = 1
+            self.shakeDirection = 1.0 if self.lastValidOffset > 0 else -1.0
+            self.sm.logger.warn("INIZIO SHAKE DI RECUPERO...")
 
-        if self.lostLineTime == 0:
-            self.lostLineTime = currentTime
-            self.backwardPhase = False
-            self.sm.logger.warn("LINEA PERSA! AVANZAMENTO PER GAP...")
-
-        elapsed = currentTime - self.lostLineTime
-
-        # PRIMA FASE: AVANZA PER GAP_TIMEOUT / 2
-        if not self.backwardPhase and elapsed <= GAP_TIMEOUT / 2:
-            self.sm.board.sendControl(0.0, GAP_SPEED)
+        if currentTime - self.shakeStartTime > self.maxShakeDuration:
+            self.shakeActive  = False
+            self.shakeAttempt = 0
+            self.sm.logger.warn("SHAKE ESAURITO — CONTINUO IN LINE_FOLLOW.")
             return "LINE_FOLLOW"
 
-        # SE ANCORA NON TROVA LINEA → TORNA INDIETRO
-        if not self.backwardPhase:
-            self.backwardPhase = True
-            self.lostLineTime = currentTime
-            self.sm.logger.warn("LINEA ANCORA NON TROVATA! RITORNO INDIETRO...")
-            self.sm.board.sendControl(0.0, -BACK_SPEED)
-            return "LINE_FOLLOW"
+        elapsed = currentTime - self.shakeStartTime
+        if elapsed > (self.shakeAttempt * 0.20):
+            self.shakeDirection *= -1.0
+            self.shakeAttempt   += 1
 
-        # FASE INDIETRO: se timeout → stop
-        if self.backwardPhase and elapsed > GAP_TIMEOUT / 2:
-            self.sm.logger.error("LINEA PERSA DOPO INDIETRO! STOP")
-            self.sm.board.sendControl(0.0, 0)
-            self.lostLineTime = 0
-            self.backwardPhase = False
-            return "LINE_FOLLOW"
-
-        # CONTINUA A TORNARE INDIETRO
-        self.sm.board.sendControl(0.0, -BACK_SPEED)
+        self.sm.board.sendControl(
+            self.shakeDirection * 0.9,
+            -self.SHAKE_REVERSE_SPEED,
+            shake=True
+        )
         return "LINE_FOLLOW"

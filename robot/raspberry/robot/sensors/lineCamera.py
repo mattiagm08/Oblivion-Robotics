@@ -1,8 +1,6 @@
 import cv2
 import numpy as np
 import time
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from picamera2 import Picamera2  # type: ignore
 from config import (
     LOWER_BLACK, UPPER_BLACK,
@@ -16,46 +14,58 @@ from config import (
 class LineCamera:
     """
     ###########################################################################
-    # LINE CAMERA - SENSOR                                                    #
+    # LINE CAMERA - FARTHEST-POINT TRACKING                                   #
     ###########################################################################
-    # Gestione acquisizione frame da PiCamera2 e rilevamento dei marcatori:  #
-    # - offset:       errore laterale della linea nera nella ROI bassa       #
-    # - lookAhead:    errore anticipato nella ROI alta (per previsione curva)#
-    # - greenLeft:    marcatore verde a sinistra della linea                  #
-    # - greenRight:   marcatore verde a destra della linea                   #
-    # - greenForward: marcatore verde davanti (incrocio dritto)              #
-    # - uTurn:        verde su entrambi i lati → inversione 180°             #
-    # - silver:       rilevamento striscia argento (checkpoint / evacuation) #
-    # - red:          rilevamento nastro rosso (goal tile)                   #
-    ###########################################################################
-    # Il filtro temporale sui verdi riduce falsi positivi dovuti a           #
-    # oscillazioni rapide o rilevazioni intermittenti dei marcatori.         #
-    ###########################################################################
-    # MJPEG STREAM: http://<IP_RASPBERRY>:8080                               #
-    # Avvia automaticamente un server HTTP sulla porta 8080 che trasmette    #
-    # il frame di debug annotato. Apribile da qualsiasi browser in rete.     #
+    # FILOSOFIA:                                                               #
+    #   L'offset primario viene calcolato sul punto PIÙ LONTANO della linea   #
+    #   visibile nel frame (ROI alta). Se quella ROI non ha linea si scala     #
+    #   verso ROI più vicine (mid → low). Così il robot sterza PRIMA della    #
+    #   curva invece di reagire quando è già dentro.                          #
+    #                                                                          #
+    # TRE ROI IN CASCATA (da lontano a vicino):                               #
+    #   FAR  (y 15%–30%) → punto di guida principale                          #
+    #   MID  (y 35%–52%) → fallback secondario                                #
+    #   NEAR (y 57%–75%) → fallback di emergenza + rilevamento marcatori      #
+    #                                                                          #
+    # CROP ADATTIVO: zoom sulla zona utile (elimina cielo/sfondo lontano).    #
+    # EDGE FALLBACK: pixel residui al bordo → offset estremo invece di None.  #
     ###########################################################################
     """
 
-    def __init__(self, cameraIndex=0, historyLen=3, streamPort=8080):
-        # IMPOSTAZIONE RISOLUZIONE E STORIA MARCATORI VERDI
-        self.Width, self.Height = 320, 240
-        self.HistoryLen = historyLen
-        self.GreenHistory = []
+    # Taglia il 30% superiore del frame originale (zona inutile/lontana).
+    # Aumenta fino a 0.40 se la camera punta molto in alto.
+    CROP_TOP_RATIO = 0.30
 
-        # CONFIGURAZIONE E AVVIO PICAMERA2
+    # ------------------------------------------------------------------
+    # DEFINIZIONE ROI (rapporti sul frame già croppato)
+    # ------------------------------------------------------------------
+    # FAR: il punto di guida principale — più lontano possibile
+    ROI_FAR_Y  = 0.12
+    ROI_FAR_H  = 0.15
+
+    # MID: fallback se FAR non ha linea
+    ROI_MID_Y  = 0.32
+    ROI_MID_H  = 0.18
+
+    # NEAR: fallback finale + edge pixels per shake detection
+    ROI_NEAR_Y = 0.55
+    ROI_NEAR_H = 0.22
+
+    def __init__(self, cameraIndex=0, historyLen=3):
+        self.Width, self.Height = 320, 240
+        self.HistoryLen   = historyLen
+        self.GreenHistory = []
+        self.lastOffset   = 0.0   # memoria per edge-fallback e blind turn
+
         self.Picam2 = Picamera2()
         config = self.Picam2.create_video_configuration(
             main={"size": (self.Width, self.Height), "format": "RGB888"}
         )
         self.Picam2.configure(config)
         self.Picam2.start()
-
-        # ATTESA PER STABILIZZAZIONE EXPOSURE E WHITE BALANCE
         time.sleep(1.0)
         self.Picam2.set_controls({"AeEnable": False, "AwbEnable": False})
 
-        # DEFINIZIONE RANGE HSV PER COLORI
         self.LowerBlack  = np.array(LOWER_BLACK)
         self.UpperBlack  = np.array(UPPER_BLACK)
         self.LowerGreen  = np.array(LOWER_GREEN)
@@ -67,232 +77,179 @@ class LineCamera:
         self.LowerRed2   = np.array(LOWER_RED2)
         self.UpperRed2   = np.array(UPPER_RED2)
 
-        # KERNEL PER OPERAZIONI MORFOLOGICHE
         self.Kernel = np.ones((3, 3), np.uint8)
 
-        # FRAME CONDIVISO PER LO STREAM MJPEG
-        self._streamFrame = None
-        self._streamLock  = threading.Lock()
+    # ------------------------------------------------------------------
+    # PREPROCESSING
+    # ------------------------------------------------------------------
+    def _preprocessFrame(self, frame):
+        """Crop zona inutile in alto + resize → zoom sul tratto vicino/medio."""
+        cropStartY = int(self.Height * self.CROP_TOP_RATIO)
+        cropped    = frame[cropStartY:, :]
+        resized    = cv2.resize(cropped, (self.Width, self.Height),
+                                interpolation=cv2.INTER_LINEAR)
+        return resized
 
-        # AVVIO SERVER MJPEG IN THREAD SEPARATO
-        self._startMjpegServer(streamPort)
-
-    # ######################################################################
-    # MJPEG STREAMING
-    # ######################################################################
-
-    def _startMjpegServer(self, port):
-        camera = self
-
-        class MjpegHandler(BaseHTTPRequestHandler):
-            def log_message(self, format, *args):
-                pass  # SILENZIA I LOG HTTP
-
-            def do_GET(self):
-                if self.path == "/":
-                    self.send_response(200)
-                    self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-                    self.end_headers()
-                    try:
-                        while True:
-                            with camera._streamLock:
-                                frame = camera._streamFrame
-                            if frame is None:
-                                time.sleep(0.05)
-                                continue
-                            ret, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                            if not ret:
-                                continue
-                            data = jpg.tobytes()
-                            self.wfile.write(b"--frame\r\n")
-                            self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                            self.wfile.write(f"Content-Length: {len(data)}\r\n\r\n".encode())
-                            self.wfile.write(data)
-                            self.wfile.write(b"\r\n")
-                            time.sleep(0.04)  # ~25 FPS
-                    except (BrokenPipeError, ConnectionResetError):
-                        pass
-                else:
-                    self.send_response(404)
-                    self.end_headers()
-
-        server = HTTPServer(("0.0.0.0", port), MjpegHandler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-
-    def _updateStreamFrame(self, frame):
-        with self._streamLock:
-            self._streamFrame = frame.copy()
-
-    # ######################################################################
-
+    # ------------------------------------------------------------------
+    # MAIN
+    # ------------------------------------------------------------------
     def getLineData(self):
-
-        # ACQUISISCE UN FRAME E RESTITUISCE UN DIZIONARIO CON TUTTI I DATI
-        # DI LINEA, MARCATORI VERDI, ARGENTO E ROSSO
-
         frameRaw = self.Picam2.capture_array()
         if frameRaw is None:
             return None
 
-        frame   = cv2.cvtColor(frameRaw, cv2.COLOR_RGB2BGR)
-        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
+        frameBGR = cv2.cvtColor(frameRaw, cv2.COLOR_RGB2BGR)
+        frame    = self._preprocessFrame(frameBGR)
+
+        blurred = cv2.bilateralFilter(frame, 7, 50, 50)
         hsv     = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
 
-        # CREAZIONE MASCHERE COLORE E PULIZIA MORFOLOGICA
+        # Maschere
         blackMask  = cv2.inRange(hsv, self.LowerBlack,  self.UpperBlack)
         greenMask  = cv2.inRange(hsv, self.LowerGreen,  self.UpperGreen)
         silverMask = cv2.inRange(hsv, self.LowerSilver, self.UpperSilver)
-        blackMask  = cv2.morphologyEx(blackMask,  cv2.MORPH_OPEN, self.Kernel)
-        greenMask  = cv2.morphologyEx(greenMask,  cv2.MORPH_OPEN, self.Kernel)
-        silverMask = cv2.morphologyEx(silverMask, cv2.MORPH_OPEN, self.Kernel)
 
-        # ######################################################################
-        # RILEVAMENTO STRISCIA ARGENTO (CHECKPOINT / EVACUATION ZONE)
-        # CONTROLLA CHE LA PERCENTUALE DI PIXEL ARGENTO NELLA ROI SUPERI 25%
-        # ######################################################################
-        silverRoiY, silverRoiH = int(self.Height * ROI_LOW_Y), int(self.Height * ROI_LOW_H)
-        silverRoi      = silverMask[silverRoiY:silverRoiY+silverRoiH, :]
-        silverPixels   = cv2.countNonZero(silverRoi)
-        silverDetected = silverPixels > (silverRoiH * self.Width * 0.25)
+        blackMask = cv2.morphologyEx(blackMask, cv2.MORPH_CLOSE, self.Kernel)
+        greenMask = cv2.morphologyEx(greenMask, cv2.MORPH_OPEN,  self.Kernel)
 
-        # ######################################################################
-        # RILEVAMENTO NASTRO ROSSO (GOAL TILE)
-        # DUE RANGE HSV PER COPRIRE ROSSO H=0-10 E H=170-180
-        # ######################################################################
-        redMask1    = cv2.inRange(hsv, self.LowerRed1, self.UpperRed1)
-        redMask2    = cv2.inRange(hsv, self.LowerRed2, self.UpperRed2)
-        redMask     = cv2.bitwise_or(redMask1, redMask2)
-        redMask     = cv2.morphologyEx(redMask, cv2.MORPH_OPEN, self.Kernel)
-        redRoi      = redMask[silverRoiY:silverRoiY+silverRoiH, :]
-        redPixels   = cv2.countNonZero(redRoi)
-        redDetected = redPixels > (silverRoiH * self.Width * 0.15)
+        # Calcolo ROI in pixel
+        farY  = int(self.Height * self.ROI_FAR_Y);  farH  = int(self.Height * self.ROI_FAR_H)
+        midY  = int(self.Height * self.ROI_MID_Y);  midH  = int(self.Height * self.ROI_MID_H)
+        nearY = int(self.Height * self.ROI_NEAR_Y); nearH = int(self.Height * self.ROI_NEAR_H)
 
-        # ######################################################################
-        # RILEVAMENTO LINEA NERA
-        # ROI BASSA E ALTA, OFFSET NORMALIZZATO [-1,1]
-        # ######################################################################
-        roiLowY, roiLowH   = silverRoiY, silverRoiH
-        roiHighY, roiHighH = int(self.Height * ROI_HIGH_Y), int(self.Height * ROI_HIGH_H)
-        offsetLow, cxLow   = self._getRobustOffset(blackMask[roiLowY:roiLowY+roiLowH, :])
-        offsetHigh, _      = self._getRobustOffset(blackMask[roiHighY:roiHighY+roiHighH, :])
+        # ── TRACKING A CASCATA (lontano → vicino) ────────────────────
+        # Si usa il punto più lontano disponibile come offset primario.
+        # activeRoi indica quale ROI ha fornito l'offset (utile per debug).
+        offsetFar,  cxFar  = self._getRobustOffset(blackMask[farY:farY+farH,   :], self.lastOffset)
+        offsetMid,  cxMid  = self._getRobustOffset(blackMask[midY:midY+midH,   :], self.lastOffset)
+        offsetNear, cxNear = self._getRobustOffset(blackMask[nearY:nearY+nearH, :], self.lastOffset)
 
-        # ######################################################################
-        # RILEVAMENTO MARCATORI VERDI
-        # ROI INFERIORE (AVVICINAMENTO INCROCIO)
-        # ######################################################################
-        greenRoiY, greenRoiH = int(self.Height * 0.50), int(self.Height * 0.30)
-        greenRoi     = greenMask[greenRoiY:greenRoiY+greenRoiH, :]
-        contoursG, _ = cv2.findContours(greenRoi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Offset primario = il più lontano disponibile
+        if offsetFar is not None:
+            primaryOffset = offsetFar
+            primaryCx     = cxFar
+            activeRoi     = "FAR"
+        elif offsetMid is not None:
+            primaryOffset = offsetMid
+            primaryCx     = cxMid
+            activeRoi     = "MID"
+        elif offsetNear is not None:
+            primaryOffset = offsetNear
+            primaryCx     = cxNear
+            activeRoi     = "NEAR"
+        else:
+            primaryOffset = None
+            primaryCx     = None
+            activeRoi     = "NONE"
 
-        leftGreen    = False
-        rightGreen   = False
-        greenForward = False
-        greenCenters = []
+        # Offset di conferma = il più vicino disponibile (per speed clamp)
+        confirmOffset = offsetNear if offsetNear is not None else offsetMid
 
-        # CENTRO LINEA DI RIFERIMENTO (FALLBACK AL CENTRO FRAME)
-        lineRef            = cxLow if cxLow is not None else self.Width // 2
-        immediateThreshold = greenRoiH * 0.65  # META' SUPERIORE ROI = "AVANTI"
+        # Aggiorna memoria solo se abbiamo un rilevamento reale
+        if primaryOffset is not None:
+            self.lastOffset = primaryOffset
 
-        # ANALISI CONTORNI VERDI
+        # ── ARGENTO / ROSSO (su ROI near) ────────────────────────────
+        silverDetected = (
+            cv2.countNonZero(silverMask[nearY:nearY+nearH, :])
+            > (nearH * self.Width * 0.25)
+        )
+        redMask = cv2.bitwise_or(
+            cv2.inRange(hsv, self.LowerRed1, self.UpperRed1),
+            cv2.inRange(hsv, self.LowerRed2, self.UpperRed2)
+        )
+        redDetected = (
+            cv2.countNonZero(redMask[nearY:nearY+nearH, :])
+            > (nearH * self.Width * 0.15)
+        )
+
+        # ── PIXEL AI BORDI per shake (ROI near) ──────────────────────
+        edgeW = int(self.Width * 0.15)
+        leftBlackPixels  = cv2.countNonZero(blackMask[nearY:nearY+nearH, 0:edgeW])
+        rightBlackPixels = cv2.countNonZero(blackMask[nearY:nearY+nearH, self.Width-edgeW:])
+
+        # ── MARCATORI VERDI (ROI mid) ─────────────────────────────────
+        contoursG, _ = cv2.findContours(
+            greenMask[midY:midY+midH, :],
+            cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        lg, rg, fg = False, False, False
+        lineRef = primaryCx if primaryCx is not None else self.Width // 2
+
         for c in contoursG:
-            area = cv2.contourArea(c)
-            if area < 600:  # SCARTA RUMORE
-                continue
-            bx, by, bw, bh = cv2.boundingRect(c)
-            if bh == 0 or not (0.3 < bw/bh < 3.0):  # FILTRO PROPORZIONI QUADRATO
+            if cv2.contourArea(c) < 400:
                 continue
             M = cv2.moments(c)
             if M["m00"] > 0:
-                gx = int(M["m10"]/M["m00"])
-                gy = int(M["m01"]/M["m00"])
-                greenCenters.append((gx, gy))
-                if gy < immediateThreshold:
-                    greenForward = True  # MARCATORE AVANTI
-                else:
-                    if gx < (lineRef - 25):
-                        leftGreen = True
-                    elif gx > (lineRef + 25):
-                        rightGreen = True
+                gx = int(M["m10"] / M["m00"])
+                gy = int(M["m01"] / M["m00"])
+                if gy < midH * 0.4:
+                    fg = True
+                elif gx < (lineRef - 25):
+                    lg = True
+                elif gx > (lineRef + 25):
+                    rg = True
 
-        # ######################################################################
-        # FILTRO TEMPORALE SUI MARCATORI VERDI
-        # EVITA OSCILLAZIONI IN RILEVAMENTO RAPIDO
-        # ######################################################################
-        self.GreenHistory.append((leftGreen, rightGreen, greenForward))
+        self.GreenHistory.append((lg, rg, fg))
         if len(self.GreenHistory) > self.HistoryLen:
             self.GreenHistory.pop(0)
 
-        # STABILIZZAZIONE TRAMITE MAGGIORANZA DEI VALORI STORICI
-        leftGreen    = max(set([h[0] for h in self.GreenHistory]), key=[h[0] for h in self.GreenHistory].count)
-        rightGreen   = max(set([h[1] for h in self.GreenHistory]), key=[h[1] for h in self.GreenHistory].count)
-        greenForward = max(set([h[2] for h in self.GreenHistory]), key=[h[2] for h in self.GreenHistory].count)
-
-        uTurn = leftGreen and rightGreen  # DEAD-END → INVERSIONE 180°
-
-        data = {
-            "offset":       offsetLow,
-            "lookAhead":    offsetHigh,
-            "greenLeft":    leftGreen,
-            "greenRight":   rightGreen,
-            "greenForward": greenForward,
-            "uTurn":        uTurn,
-            "silver":       silverDetected,
-            "red":          redDetected,
-            "lineX":        lineRef,
-            "greenCenters": greenCenters,
-            "frame":        frame,
-            "roiViz":       [(roiLowY, roiLowH), (roiHighY, roiHighH), (greenRoiY, greenRoiH)]
+        return {
+            # offset = punto PIÙ LONTANO visibile (guida principale)
+            "offset":           primaryOffset,
+            # confirmOffset = punto vicino (usato per speed clamp)
+            "confirmOffset":    confirmOffset,
+            # quale ROI ha fornito l'offset (per logging/debug)
+            "activeRoi":        activeRoi,
+            "leftBlackPixels":  leftBlackPixels,
+            "rightBlackPixels": rightBlackPixels,
+            "greenLeft":        any(h[0] for h in self.GreenHistory),
+            "greenRight":       any(h[1] for h in self.GreenHistory),
+            "greenForward":     any(h[2] for h in self.GreenHistory),
+            "uTurn":            lg and rg,
+            "silver":           silverDetected,
+            "red":              redDetected,
+            "frame":            frame
         }
 
-        # AGGIORNA IL FRAME DELLO STREAM CON L'ANNOTAZIONE DEBUG
-        self._updateStreamFrame(self._buildDebugFrame(data))
+    # ------------------------------------------------------------------
+    # OFFSET ROBUSTO + EDGE FALLBACK
+    # ------------------------------------------------------------------
+    def _getRobustOffset(self, maskRoi, fallbackSide=0.0):
+        contours, _ = cv2.findContours(
+            maskRoi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if contours:
+            largest = max(contours, key=cv2.contourArea)
+            if cv2.contourArea(largest) >= 150:
+                M = cv2.moments(largest)
+                if M["m00"] > 0:
+                    cx        = int(M["m10"] / M["m00"])
+                    rawOffset = (cx - (self.Width / 2)) / (self.Width / 2)
+                    if abs(rawOffset) < 0.04:
+                        rawOffset = 0.0
+                    return round(rawOffset, 3), cx
 
-        return data
+        return self._edgeFallback(maskRoi, fallbackSide)
 
-    def _getRobustOffset(self, maskRoi):
+    def _edgeFallback(self, maskRoi, side):
+        """
+        Se la linea non è rilevabile nel corpo del frame, cerca pixel
+        residui al bordo verso cui stava andando il robot.
+        Restituisce ±0.95 invece di None → evita falsi 'linea assente'.
+        """
+        edgeW     = int(self.Width * 0.12)
+        minPixels = 15
 
-        # CALCOLA IL CONTORNO NERO PIU' GRANDE NELLA ROI E RITORNA:
-        # - OFFSET NORMALIZZATO [-1,1]
-        # - POSIZIONE PIXEL CX
-        # RESTITUISCE (None, None) SE LINEA NON TROVATA O TROPPO PICCOLA.
+        if side > 0.20:
+            if cv2.countNonZero(maskRoi[:, self.Width - edgeW:]) >= minPixels:
+                return 0.95, self.Width - edgeW // 2
+        elif side < -0.20:
+            if cv2.countNonZero(maskRoi[:, :edgeW]) >= minPixels:
+                return -0.95, edgeW // 2
 
-        contours, _ = cv2.findContours(maskRoi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return None, None
-        largest = max(contours, key=cv2.contourArea)
-        if cv2.contourArea(largest) < 150:
-            return None, None
-        M = cv2.moments(largest)
-        if M["m00"] > 0:
-            cx     = int(M["m10"]/M["m00"])
-            offset = (cx - (self.Width / 2)) / (self.Width / 2)
-            return round(offset, 3), cx
         return None, None
 
-    def _buildDebugFrame(self, data):
-
-        # COSTRUISCE IL FRAME ANNOTATO DA INVIARE ALLO STREAM MJPEG.
-
-        frame  = data["frame"].copy()
-        colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0)]  # ROSSO, BLU, VERDE
-        for i, (y, h) in enumerate(data["roiViz"]):
-            cv2.rectangle(frame, (0, y), (self.Width, y + h), colors[i], 1)
-
-        greenRoiY = data["roiViz"][2][0]
-        for (gx, gy) in data["greenCenters"]:
-            cv2.circle(frame, (gx, greenRoiY + gy), 7, (0, 255, 0), -1)
-
-        status = (
-            f"L:{int(data['greenLeft'])} R:{int(data['greenRight'])} "
-            f"F:{int(data['greenForward'])} U:{int(data['uTurn'])} "
-            f"Off:{data['offset']}"
-        )
-        cv2.putText(frame, status, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
-        return frame
-
     def release(self):
-
-        # FERMA LA TELECAMERA E RILASCIA LE RISORSE ASSOCIATE.
-
         self.Picam2.stop()
+        self.Picam2.close()

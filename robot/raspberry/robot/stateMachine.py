@@ -85,17 +85,11 @@ class StateMachine:
                 nextStateName = stateObj.execute()
 
                 # GESTIONE TRANSIZIONE DI STATO (CON CONTROLLO NULL)
-                if nextStateName and nextStateName != self.currentStateName:
-                    if nextStateName in self.states:
-                        self.logger.info(
-                            f"Transizione: {self.currentStateName} -> {nextStateName}"
-                        )
-                        self.currentStateName = nextStateName
-                        self.logger.state(self.currentStateName)
-                    else:
-                        self.logger.error(
-                            f"Tentata transizione verso stato inesistente: {nextStateName}"
-                        )
+                try:
+                    nextStateName = stateObj.execute()
+                except Exception as e:
+                    self.logger.error(f"Errore nello stato {self.currentStateName}: {e}")
+                    continue
 
                 # SINCRONIZZAZIONE DEL LOOP A 50Hz (PERIODO 20ms)
                 time.sleep(0.02)
@@ -108,26 +102,40 @@ class StateMachine:
             self.stop()
 
     def stop(self):
-        # #####################################################################
-        # PROCEDURA DI ARRESTO SICURO DEL ROBOT                               #
-        # #####################################################################
+
+        if self._stopped:
+            return
+
+        self._stopped = True
         self.logger.warn("Richiesta arresto robot...")
 
-        # INVIO COMANDO DI STOP AI MOTORI PRIMA DI CHIUDERE LA COMUNICAZIONE
-        if hasattr(self, 'board') and self.board:
-            self.board.sendControl(0, 0)
-            time.sleep(0.1)
-            self.board.close()
-            self.logger.info("Comunicazione seriale chiusa.")
-
-        # RILASCIA LA TELECAMERA SE INIZIALIZZATA
-        if hasattr(self, 'lineCam') and self.lineCam:
-            self.lineCam.release()
-            self.logger.info("Risorse video rilasciate.")
-
         self.active = False
-        self.logger.success("Robot arrestato con successo.")
 
+        # STOP MOTORI
+        if hasattr(self, 'board') and self.board:
+            try:
+                self.board.sendControl(0, 0)
+                time.sleep(0.1)
+            except:
+                pass
+
+        # CHIUSURA CAMERA
+        if hasattr(self, 'lineCam') and self.lineCam:
+            try:
+                self.lineCam.release()
+                self.logger.info("Camera rilasciata.")
+            except Exception as e:
+                self.logger.error(f"Errore chiusura camera: {e}")
+
+        # CHIUSURA SERIAL
+        if hasattr(self, 'board') and self.board:
+            try:
+                self.board.close()
+                self.logger.info("Seriale chiusa.")
+            except:
+                pass
+
+        self.logger.success("Robot arrestato con successo.")
 
 if __name__ == "__main__":
     fsm = StateMachine()

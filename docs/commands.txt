@@ -42,3 +42,8 @@ cat robot.log                      | Legge il contenuto di un file di log
 tail -f robot.log                  | Mostra il log in tempo reale mentre il robot gira
 df -h                              | Controlla quanto spazio libero rimane sulla SD
 vcgencmd measure_temp              | Controlla la temperatura del processore
+
+scp -r "C:\Users\matti\Desktop\Progetti\Oblivion Robotics\robot\raspberry" user@raspberryline:/home/user/RescueLine
+
+# PER SSH RASPBERRY
+ssh user@raspberryline "rm -rf /home/user/RescueLine/*" && scp -r "C:\Users\matti\Desktop\Progetti\Oblivion Robotics\robot\raspberry" user@raspberryline:/home/user/RescueLine && ssh user@raspberryline "cd /home/user/RescueLine/raspberry/robot/ && python3.13 main.py"
