@@ -46,4 +46,4 @@ vcgencmd measure_temp              | Controlla la temperatura del processore
 scp -r "C:\Users\matti\Desktop\Progetti\Oblivion Robotics\robot\raspberry" user@raspberryline:/home/user/RescueLine
 
 # PER SSH RASPBERRY
-ssh user@raspberryline "rm -rf /home/user/RescueLine/*" && scp -r "C:\Users\matti\Desktop\Progetti\Oblivion Robotics\robot\raspberry" user@raspberryline:/home/user/RescueLine && ssh user@raspberryline "cd /home/user/RescueLine/raspberry/robot/ && python3.13 main.py"
+ssh user@raspberryline "rm -rf /home/user/Oblivion/*" && scp -r "C:\Users\matti\Desktop\Progetti\Oblivion Robotics\robot\raspberry" user@raspberryline:/home/user/Oblivion && ssh user@raspberryline "cd /home/user/Oblivion/raspberry/robot/ && python3.13 main.py"
