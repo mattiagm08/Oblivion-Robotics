@@ -21,11 +21,6 @@
 #define IN3_L 5
 #define IN4_L 18
 
-// CONFIGURAZIONE LED ILLUMINAZIONE
-
-#define LED_PIN 32
-int ledBrightness = 50;
-
 // ISTANZE DEI SENSORI E DEL MULTIPLEXER I2C
 
 TCA9548 i2cMux(0x70);
@@ -347,8 +342,6 @@ void setup() {
   
   initializeMotors();
   stopMotors();
-
-  analogWrite(LED_PIN, ledBrightness);
 
   if (!i2cMux.begin()) Serial.println("ERRORE MULTIPLEXER");
   

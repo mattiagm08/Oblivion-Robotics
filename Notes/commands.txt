@@ -47,3 +47,4 @@ scp -r "C:\Users\matti\Desktop\Progetti\Oblivion Robotics\robot\raspberry" user@
 
 # PER SSH RASPBERRY
 ssh user@raspberryline "rm -rf /home/user/Oblivion/*" && scp -r "C:\Users\matti\Desktop\Progetti\Oblivion Robotics\robot\raspberry" user@raspberryline:/home/user/Oblivion && ssh user@raspberryline "cd /home/user/Oblivion/raspberry/robot/ && python3.13 main.py"
+scp -r "C:\Users\matti\Desktop\Progetti\Oblivion Robotics\RescueLine" user@raspberryline:/home/user/RescueLine

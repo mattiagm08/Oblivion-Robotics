@@ -1,39 +1,73 @@
-import cv2 # type: ignore
-from picamera2 import Picamera2 # type: ignore
+# LIBRERIE E STATI IMPORTATI
+
 import config
 import comm
-from states import line_follower, rescue_zone
+import cv2 # type: ignore
+from picamera2 import Picamera2 # type: ignore
+from states import line_follower, rescue_zone, obstacle
 
 def main():
-    comm.general_begin()
-    config.init_trackbars()
-    
-    picam2 = Picamera2()
-    try:
-        picam2.configure(picam2.create_preview_configuration(main={"format": 'XRGB8888', "size": (640, 480)}))
-        picam2.start()
-    except Exception as e:
-        print(f"Errore telecamera: {e}")
 
-    current_state = "LINE"
+    # INIZIALIZZAZIONE COMUNICAZIONE
+
+    comm.begin()
+    line_follower.initTrackbars() 
+
+    # SETUP PICAMERA
+
+    piCam = Picamera2()
+
+    try:
+        # CONFIGURAZIONE E AVVIO PICAMERA
+
+        piCam.configure(piCam.create_preview_configuration(main={"format": 'XRGB8888', "size": (800, 600)}))
+        piCam.start()
+
+    # ERRORE PICAMERA AVVIO
+
+    except Exception as e:
+        print(f"Camera error: {e}")
+
+    # INIZIALIZZAZIONE STATO CORRENTE
+
+    currentState = "LINE"
+
+    # CATTURA FRAME
 
     while True:
         try:
-            img_pulita = picam2.capture_array()
+            cleanImage = piCam.capture_array()
+            cleanImage = cv2.rotate(cleanImage, cv2.ROTATE_90_CLOCKWISE)
         except:
-            break
-        
-        if current_state == "LINE":
-            current_state = line_follower.run(img_pulita)
-        elif current_state == "RESCUE":
-            current_state = rescue_zone.run(img_pulita)
+            break     
+
+        # LOGICA STATE MACHINE
+
+        match currentState:        
+
+            case "LINE":
+                currentState = line_follower.run(cleanImage)
+
+            case "RESCUE":
+                currentState = rescue_zone.run(cleanImage)
+
+            case "OBSTACLE":
+                currentState = obstacle.run(cleanImage)
+
+            case _:
+                currentState = "LINE"
+
+        # CHIUSURA CON EXIT KEY ('q') E RILASCIO RISORSE
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
-            comm.rilascia()
+            comm.release()
             break
 
-    picam2.stop()
+    # STOP PICAMERA E CHIUSURA FINESTRE
+
+    piCam.stop()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
+
     main()
