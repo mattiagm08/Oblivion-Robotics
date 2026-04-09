@@ -37,7 +37,7 @@ def main():
     while True:
         try:
             cleanImage = piCam.capture_array()
-            cleanImage = cv2.rotate(cleanImage, cv2.ROTATE_90_CLOCKWISE)
+            cleanImage = cv2.rotate(cleanImage, cv2.ROTATE_90_COUNTERCLOCKWISE)
         except:
             break     
 

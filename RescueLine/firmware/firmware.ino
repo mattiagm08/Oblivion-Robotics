@@ -6,7 +6,7 @@
 #include <Adafruit_Sensor.h>
 #include "TCA9548.h"
 
-// DEFINIZIONE PIN DRIVER MOTORI
+// DEFINIZIONE PIN DRIVER MOTORI (AGGIORNATI DA VECCHIO FIRMWARE)
 
 #define ENA_R 12  
 #define IN1_R 14
@@ -75,30 +75,30 @@ void stopMotors() {
   analogWrite(ENA_L, 0); analogWrite(ENB_L, 0);
 }
 
-// CONTROLLO PWM E DIREZIONE MOTORI DESTRI
+// CONTROLLO PWM E DIREZIONE MOTORI DESTRI (ORIENTAMENTO INVERTITO DA SETUP)
 
 void setMotorRight(int pwm) {
   if (pwm >= 0) {
-    digitalWrite(IN1_R, LOW);  digitalWrite(IN2_R, HIGH);
-    digitalWrite(IN3_R, HIGH); digitalWrite(IN4_R, LOW);
-  } else {
     digitalWrite(IN1_R, HIGH); digitalWrite(IN2_R, LOW);
     digitalWrite(IN3_R, LOW);  digitalWrite(IN4_R, HIGH);
+  } else {
+    digitalWrite(IN1_R, LOW);  digitalWrite(IN2_R, HIGH);
+    digitalWrite(IN3_R, HIGH); digitalWrite(IN4_R, LOW);
     pwm = -pwm;
   }
   analogWrite(ENA_R, constrain(pwm, 0, 255));
   analogWrite(ENB_R, constrain(pwm, 0, 255));
 }
 
-// CONTROLLO PWM E DIREZIONE MOTORI SINISTRI
+// CONTROLLO PWM E DIREZIONE MOTORI SINISTRI (ORIENTAMENTO INVERTITO DA SETUP)
 
 void setMotorLeft(int pwm) {
   if (pwm >= 0) {
-    digitalWrite(IN1_L, HIGH); digitalWrite(IN2_L, LOW);
-    digitalWrite(IN3_L, LOW);  digitalWrite(IN4_L, HIGH);
-  } else {
     digitalWrite(IN1_L, LOW);  digitalWrite(IN2_L, HIGH);
     digitalWrite(IN3_L, HIGH); digitalWrite(IN4_L, LOW);
+  } else {
+    digitalWrite(IN1_L, HIGH); digitalWrite(IN2_L, LOW);
+    digitalWrite(IN3_L, LOW);  digitalWrite(IN4_L, HIGH);
     pwm = -pwm;
   }
   analogWrite(ENA_L, constrain(pwm, 0, 255));
@@ -121,7 +121,7 @@ void calibrateMpu() {
 // AGGIORNAMENTO DELL'ANGOLO DI ROTAZIONE (HEADING) TRAMITE IMU
 
 float updateMpu() {
-  i2cMux.selectChannel(1);
+  i2cMux.selectChannel(3); // Canale aggiornato a 3
   sensors_event_t accel, gyro, temp;
   mpuSensor.getEvent(&accel, &gyro, &temp);
   unsigned long currentTime = millis();
@@ -352,7 +352,7 @@ void setup() {
 
   if (!i2cMux.begin()) Serial.println("ERRORE MULTIPLEXER");
   
-  i2cMux.selectChannel(1);
+  i2cMux.selectChannel(3); // Canale aggiornato a 3
   if (mpuSensor.begin()) {
     mpuSensor.setGyroRange(MPU6050_RANGE_250_DEG);
     mpuSensor.setFilterBandwidth(MPU6050_BAND_21_HZ);
