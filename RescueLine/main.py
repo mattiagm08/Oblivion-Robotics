@@ -20,7 +20,7 @@ def main():
     try:
         # CONFIGURAZIONE E AVVIO PICAMERA
 
-        piCam.configure(piCam.create_preview_configuration(main={"format": 'XRGB8888', "size": (800, 600)}))
+        piCam.configure(piCam.create_preview_configuration(main={"format": 'XRGB8888', "size": (600, 800)}))
         piCam.start()
 
     # ERRORE PICAMERA AVVIO

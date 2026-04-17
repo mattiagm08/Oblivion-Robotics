@@ -1,6 +1,5 @@
 import serial  # type: ignore
 import struct
-import time
 
 # IMPOSTAZIONI DELLA CONNESSIONE SERIALE
 
@@ -11,12 +10,6 @@ TIMEOUT_VAL = 0.1
 # INIZIALIZZAZIONE DELL'OGGETTO SERIALE
 
 serialConn = serial.Serial(PORT_NAME, BAUD_RATE, timeout = TIMEOUT_VAL)
-
-# STATO INTERNO PALLA (POPOLATO DA getSensors QUANDO ARRIVA 0xBB)
-
-lastBallState = None
-ballRequestInProgress = False
-lastSilverState = None
 
 # FUNZIONE PER INVIARE I DATI VIA SERIALE
 
@@ -41,15 +34,12 @@ def drive(offset):
 # FUNZIONE PER RICEVERE I DATI DAI SENSORI (BINARIO)
 
 def getSensors():
-    global lastBallState
     try:
-        while serialConn.in_waiting > 0:
-            header = serialConn.read(1)
-
-            if header == b'\xaa':
+        if serialConn.in_waiting >= 13:
+            if serialConn.read(1) == b'\xaa':
                 payload = serialConn.read(12)
-                if len(payload) != 12:
-                    return None
+
+                # DECODIFICA 1 FLOAT (f) + 4 UINT16 (H) IN LITTLE ENDIAN (<)
 
                 data = struct.unpack('<HHHHf', payload)
                 return {
@@ -59,20 +49,9 @@ def getSensors():
                     "tofBack":  data[3],
                     "heading":  data[4]
                 }
-
-            elif header == b'\xbb':
-                payload = serialConn.read(1)
-                if len(payload) == 1:
-                    lastBallState = bool(payload[0])
-
-            elif header == b'\xcc':
-                payload = serialConn.read(1)
-                if len(payload) == 1:
-                    lastSilverState = bool(payload[0])
-
+                
     except Exception as e:
         print(f"Errore ricezione: {e}")
-
     return None
 
 # AVVIO E STOP COMANDI SERIALE
@@ -85,33 +64,18 @@ def stop():
 
 # FUNZIONI DI MOVIMENTO TRAMITE SERIALE
 
-# [AVANTI]
-
-def forward():
-    sendCommand(13)
-
-# [SINISTRA]
-
-def left():
-    sendCommand(14)
-
-# [DESTRA]
-
-def right():
-    sendCommand(15)
-
 # [INDIETRO]
 
 def backward():
     sendCommand(4)
 
 # [INCROCIO SINISTRO]
-
+    
 def leftIntersection():
     sendCommand(7)
 
 # [INCROCIO DESTRO]
-
+    
 def rightIntersection():
     sendCommand(8)
 
@@ -130,34 +94,6 @@ def isSilver():
 def isRed():
     sendCommand(11)
 
-# [PALLA ARGENTATA]
-
-def requestBall():
-    global lastBallState, ballRequestInProgress
-    
-    if ballRequestInProgress:
-        return None
-
-    ballRequestInProgress = True
-    lastBallState = None
-    
-    try:
-        sendCommand(12)
-        deadline = time.time() + 0.2
-        
-        while time.time() < deadline:
-            sensors = getSensors()
-                        
-            if lastBallState is not None:
-                result = lastBallState
-                lastBallState = None
-                return result
-    finally:
-        ballRequestInProgress = False
-        
-    print("Nessuna risposta da requestBall")
-    return None
-
 # [DEFAULT]
 
 def default():
@@ -168,15 +104,3 @@ def default():
 def release():
     stop()
     serialConn.close()
-
-def checkSilver():
-    global lastSilverState
-    
-    getSensors()  # aggiorna buffer
-    
-    if lastSilverState is not None:
-        result = lastSilverState
-        lastSilverState = None
-        return result
-    
-    return None

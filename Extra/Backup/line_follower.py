@@ -1,7 +1,9 @@
-
+import cv2
 import numpy as np  # type: ignore
 import comm # type: ignore
-import cv2
+import subprocess
+
+#modified
 
 WINDOW_NAME_GREEN = "Immagine con sogliatura verde"
 WINDOW_NAME_MAIN  = "Main View"
@@ -17,7 +19,7 @@ THRESHOLD_GRAY_CURVE = 90
 GAUSSIAN_BLUR_KERN = (11, 11)
 GAUSSIAN_BLUR_INTERSECTION = (15, 15)
 
-MIN_GREEN_RECT_AREA = 33000
+MIN_GREEN_RECT_AREA = 15000
 MAX_GREEN_PIXELS_TOTAL = 120000
 MIN_GREEN_PIXELS_SIDE = 2000
 MIN_LINE_CONTOUR_AREA = 500
@@ -42,6 +44,8 @@ ROI_BOTTOM       = (0, 380, 640, 480)
 ROI_GAP_CHECK    = (0,   0, 640, 100)
 
 _lastCommand = None
+
+
 
 def _onTrackbarChange(_value):
     h_min = cv2.getTrackbarPos("H_min", WINDOW_NAME_GREEN)
@@ -82,7 +86,8 @@ def _incr(img_pulita, img_nocrop):
     _, binary = cv2.threshold(gray, THRESHOLD_GRAY_LINE, 255, cv2.THRESH_BINARY_INV)
     return binary
 
-def run(cleanImage):
+def run(cleanImage):       
+        
     sensorData = comm.getSensors()
     if sensorData and sensorData['tofFront'] < TOF_OBSTACLE_DISTANCE:
         _sendIfChanged(comm.stop)
@@ -209,7 +214,7 @@ def run(cleanImage):
             elif pixel_sx > MIN_GREEN_PIXELS_SIDE and area_rettangolo > MIN_GREEN_RECT_AREA and pixel_bianchi > pixel_neri:
                 print("INCROCIOsx")
                 _sendIfChanged(comm.leftIntersection)
-            elif pixel_dx > MIN_GREEN_PIXELS_SIDE  and area_rettangolo > MIN_GREEN_RECT_AREA and pixel_bianchi > pixel_neri: 
+            elif pixel_dx > MIN_GREEN_PIXELS_SIDE and area_rettangolo > MIN_GREEN_RECT_AREA and pixel_bianchi > pixel_neri: 
                 print("INCROCIOdx")
                 _sendIfChanged(comm.rightIntersection)
             else:
@@ -280,9 +285,3 @@ def run(cleanImage):
    
 
     return "LINE"
-
-
-
-
-
-

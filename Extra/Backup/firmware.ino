@@ -65,6 +65,8 @@ unsigned long lastMPUTime = 0;
 unsigned long lastSensorMillis = 0;
 const int sensorInterval = 50;
 
+bool argento = false;
+
 bool imuReady = false;
 bool imuStable = false;
 
@@ -92,8 +94,9 @@ float turnTargetHeading = 0;
 bool turnInitialized = false;
 
 unsigned long noIntersectionUntil = 0;
-
+int nig;
 void setup() {
+  nig = 0;
   Serial.begin(115200);
   Wire.begin(21, 22);
   Wire.setClock(100000);
@@ -130,10 +133,13 @@ void loop() {
   updateMpu();
   moveRobot();
   updateTof();
-  if(valTFront <= 50) Obstacle();
-  if(!digitalRead(SILVER_LEFT) || !digitalRead(SILVER_RIGHT)) isArgento();
-  if((digitalRead(SILVER_LEFT)) && digitalRead(SILVER_RIGHT)) digitalWrite(23, LOW);
-  sendSerial();
+  if(valTFront <= 50 && nig < 1){
+    Obstacle();
+    nig++;
+  } 
+  if(!digitalRead(SILVER_LEFT) || !digitalRead(SILVER_RIGHT)) {
+    Serial.println("Argento!!");
+  }
 }
 
 void initializeMotors() {
@@ -645,7 +651,7 @@ void Obstacle(){
 }
 
 void isArgento(){
-  digitalWrite(23, HIGH);
+  argento = true;
   setMotorLeft(-30);
   setMotorRight(-30);
   delay(120);
@@ -656,20 +662,14 @@ void isArgento(){
     setMotorLeft(150);
     setMotorRight(150);
     delay(500);
-    digitalWrite(23, HIGH);
-    
   }else{
     if(!digitalRead(SILVER_LEFT)){
       setMotorLeft(0);
       setMotorRight(150);
-
-      digitalWrite(23, HIGH);
     }
     else if(!digitalRead(SILVER_RIGHT)){
       setMotorLeft(150);
       setMotorRight(0);
-
-      digitalWrite(23, HIGH);
     }
   }
 }

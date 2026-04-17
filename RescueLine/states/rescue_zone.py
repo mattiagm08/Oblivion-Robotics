@@ -1,8 +1,9 @@
-import cv2 # type: ignore
-import comm
+import subprocess
+import os
 
-def run(img_pulita):
-    print("In Rescue Zone...")
-    # Qui andrà la logica per la rescue zone
-    # Per ora torna a LINE o resta qui
-    return "RESCUE"
+process = None
+    
+os._exit(0)
+
+
+
